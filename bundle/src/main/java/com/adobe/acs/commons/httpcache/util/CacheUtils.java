@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2015 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +14,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.httpcache.util;
 
@@ -28,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -60,7 +59,7 @@ public class CacheUtils {
     public static File createTemporaryCacheFile(CacheKey cacheKey) throws IOException {
         // Create a file in Java temp directory with cacheKey.toSting() as file name.
 
-        File file = File.createTempFile(cacheKey.toString(), ".tmp");
+        File file = Files.createTempFile(cacheKey.toString(), ".tmp").toFile();
         if (null != file) {
             log.debug("Temp file created with the name - {}", cacheKey);
         }

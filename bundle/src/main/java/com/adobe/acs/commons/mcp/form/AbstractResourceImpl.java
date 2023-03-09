@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2017 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,17 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.mcp.form;
 
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.StreamSupport;
+
+import com.day.cq.commons.jcr.JcrConstants;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.sling.api.resource.AbstractResource;
 import org.apache.sling.api.resource.ModifiableValueMap;
@@ -35,6 +36,7 @@ import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.api.resource.ValueMap;
 import org.apache.sling.api.wrappers.ModifiableValueMapDecorator;
 import org.apache.sling.api.wrappers.ValueMapDecorator;
+import org.apache.sling.jcr.resource.api.JcrResourceConstants;
 import org.osgi.annotation.versioning.ProviderType;
 
 import static com.day.cq.commons.jcr.JcrConstants.JCR_PRIMARYTYPE;
@@ -53,16 +55,31 @@ public class AbstractResourceImpl extends AbstractResource {
     String type;
     String superType;
 
-    public AbstractResourceImpl(String path, String resourceType, String resourceSuperType, ResourceMetadata metadata) {
+    ValueMap properties;
+
+    public AbstractResourceImpl(String path, String resourceType, String resourceSuperType, Map<String, Object> properties) {
         children = new ArrayList<>();
         this.path = path;
         this.type = resourceType;
         this.superType = resourceSuperType;
-        this.meta = metadata == null ? new ResourceMetadata() : metadata;
+        this.meta = new ResourceMetadata();
         if (resourceType != null) {
-            meta.put("sling:resourceType", resourceType);
+            meta.put(JcrResourceConstants.SLING_RESOURCE_TYPE_PROPERTY, resourceType);
         }
-        meta.put(JCR_PRIMARYTYPE, "nt:unstructured");
+        // Required property; Setting to path breaks functionality
+        meta.setResolutionPath(path);
+        meta.setCreationTime((new Date()).getTime());
+        meta.setResolutionPathInfo("");
+
+
+        if (properties == null) {
+            properties = new HashMap<>();
+        }
+
+        properties.put(JcrResourceConstants.SLING_RESOURCE_TYPE_PROPERTY, resourceType);
+        properties.put(JcrResourceConstants.SLING_RESOURCE_SUPER_TYPE_PROPERTY, resourceSuperType);
+
+        this.properties = new ValueMapDecorator(properties);
     }
 
     @Override
@@ -174,6 +191,7 @@ public class AbstractResourceImpl extends AbstractResource {
 
     public void setPath(String path) {
         this.path = path;
+        meta.setResolutionPath(this.path);
     }
 
     @Override
@@ -183,7 +201,7 @@ public class AbstractResourceImpl extends AbstractResource {
 
     @Override
     public String getResourceType() {
-        Object t = meta.get("sling:resourceType");
+        Object t = properties.get(JcrResourceConstants.SLING_RESOURCE_TYPE_PROPERTY);
         return t == null ? null : String.valueOf(t);
     }
 
@@ -199,7 +217,7 @@ public class AbstractResourceImpl extends AbstractResource {
 
     @Override
     public ValueMap getValueMap() {
-        return new ValueMapDecorator(meta);
+        return new ValueMapDecorator(properties);
     }
 
     @Override
@@ -208,23 +226,23 @@ public class AbstractResourceImpl extends AbstractResource {
     }
 
     public AbstractResourceImpl cloneResource() {
-        ResourceMetadata clonedMetadata = new ResourceMetadata();
-        if (meta != null) {
-            clonedMetadata.putAll(meta);
+        ValueMap clonedProperties = new ValueMapDecorator(new HashMap<>());
+        if (properties != null) {
+            clonedProperties.putAll(properties);
         }
-        AbstractResourceImpl clone = new AbstractResourceImpl(getPath(), getResourceType(), getResourceSuperType(), clonedMetadata);
+        AbstractResourceImpl clone = new AbstractResourceImpl(getPath(), getResourceType(), getResourceSuperType(), properties);
         getChildren().forEach(child -> clone.addChild(((AbstractResourceImpl) child).cloneResource()));
         return clone;
     }
 
     public void disableMergeResourceProvider() {
-        getResourceMetadata().put("sling:hideChildren", "*");
+        properties.put("sling:hideChildren", "*");
         children.forEach(c -> ((AbstractResourceImpl) c).disableMergeResourceProvider());
     }
 
     public Map<String, Object> convertTreeToMap() {
         HashMap<String, Object> out = new HashMap<>();
-        out.putAll(meta);
+        out.putAll(properties);
         children.forEach(c -> out.put(c.getName(), ((AbstractResourceImpl) c).convertTreeToMap()));
         return out;
     }

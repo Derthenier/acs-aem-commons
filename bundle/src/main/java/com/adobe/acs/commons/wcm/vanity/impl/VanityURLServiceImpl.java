@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2017 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +14,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.wcm.vanity.impl;
 
@@ -38,6 +36,8 @@ import javax.jcr.RepositoryException;
 import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletException;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 @Component(service = VanityURLService.class)
 @SuppressWarnings("checkstyle:abbreviationaswordinname")
@@ -77,10 +77,11 @@ public class VanityURLServiceImpl implements VanityURLService {
             candidateVanity = request.getResourceResolver().map(request, candidateVanity);
         }
         // else, new PathInfo(..) has already handled the mapping...
-
         log.trace("Generated Candidate Vanity URL from the mapping of [ {} -> {} ]", requestURI, candidateVanity);
 
-        final String pathScope = StringUtils.removeEnd(requestURI, candidateVanity);
+        final String pathScope = getPathScope(requestURI, candidateVanity);
+
+        log.debug("Path Scope to check for Vanity URL Mapping [ {} ]", pathScope);
 
         log.debug("Candidate vanity URL to check and dispatch: [ {} ]", candidateVanity);
 
@@ -103,6 +104,27 @@ public class VanityURLServiceImpl implements VanityURLService {
         }
 
         return false;
+    }
+
+    protected String getPathScope(final String requestURI, final String candidateVanity) {
+        try {
+            /**
+             * AEM as a Cloud Service includes scheme, host, and port in candidateVanity
+             * While requestURI only includes the path
+             *
+             * We must remove the scheme/host/port from the candidateVanity so that StringUtils.removeEnd(..) resolves correctly
+             */
+            final URI uri = new URI(candidateVanity);
+            final String candidateVanityPath = uri.getPath();
+
+            log.debug("Creating Path Scope from requestURI: [ {} ] and Candidate Vanity Path: [ {} ]", requestURI, candidateVanityPath);
+
+            return StringUtils.removeEnd(requestURI, candidateVanityPath);
+        } catch (URISyntaxException e) {
+            log.error("Candidate Vanity [ {} ] is not a valid URI", candidateVanity);
+        }
+
+        return requestURI;
     }
 
     /**

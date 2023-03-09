@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2017 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,10 +14,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.reports.models;
 
+import com.adobe.acs.commons.reports.internal.DelimiterConfiguration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -45,12 +44,24 @@ public class ReferencesModel implements ReportCellCSVExporter {
   @OSGiService
   private ReferenceAggregator aggregator;
 
+  @OSGiService
+  private DelimiterConfiguration delimiterConfiguration;
+
   private ReferenceList referenceList;
 
   private Resource resource;
 
   public ReferencesModel(Resource resource) {
     this.resource = resource;
+  }
+
+  /**
+   * Used only for testing.
+   * @param delimiterConfiguration the delimiter configuration to use for this exporter
+   */
+  ReferencesModel(Resource resource, DelimiterConfiguration delimiterConfiguration) {
+    this.resource = resource;
+    this.delimiterConfiguration = delimiterConfiguration;
   }
 
   public List<Reference> getReferences() {
@@ -67,7 +78,7 @@ public class ReferencesModel implements ReportCellCSVExporter {
     for (Reference reference : referenceList) {
       refStrings.add(reference.getType() + " - " + reference.getTarget().getPath());
     }
-    return StringUtils.join(refStrings, ";");
+    return StringUtils.join(refStrings, delimiterConfiguration.getMultiValueDelimiter());
   }
 
   @PostConstruct

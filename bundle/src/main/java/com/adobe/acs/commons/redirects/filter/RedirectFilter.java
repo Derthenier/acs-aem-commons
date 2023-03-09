@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2016 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +14,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.redirects.filter;
 
@@ -23,6 +21,7 @@ import com.adobe.acs.commons.redirects.LocationHeaderAdjuster;
 import com.adobe.acs.commons.redirects.models.RedirectConfiguration;
 import com.adobe.acs.commons.redirects.models.RedirectMatch;
 import com.adobe.acs.commons.redirects.models.RedirectRule;
+import com.adobe.acs.commons.redirects.models.RedirectState;
 import com.adobe.acs.commons.redirects.models.Redirects;
 import com.adobe.granite.jmx.annotation.AnnotatedStandardMBean;
 import com.day.cq.replication.ReplicationAction;
@@ -33,7 +32,6 @@ import com.google.common.cache.CacheBuilder;
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.net.URI;
-import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -153,8 +151,12 @@ public class RedirectFilter extends AnnotatedStandardMBean
         @AttributeDefinition(name = "Preserve Query String", description = "Preserve query string in redirects", type = AttributeType.BOOLEAN)
         boolean preserveQueryString() default true;
 
-        @AttributeDefinition(name = "Evaluate Selectors", description = "Take into account selectors when evaluating redirects. " +
-                "When this flag is unchecked (default), selectors are ignored and don't participate in rule matching", type = AttributeType.BOOLEAN)
+        @AttributeDefinition(name = "Preserve Extension", description = "Whether to preserve extensions. "
+                + "When this flag is checked (default), redirect filter will preserve the extension from the request, "
+                + "e.g. append .html to the Location header. ", type = AttributeType.BOOLEAN)
+        boolean preserveExtension() default true;
+
+        @AttributeDefinition(name = "Evaluate Selectors", description = "(Deprecated) Use the Evaluate URI mode in redirect rule to capture selectors,", type = AttributeType.BOOLEAN)
         boolean evaluateSelectors() default false;
 
         @AttributeDefinition(name = "Additional Response Headers", description = "Optional response headers in the name:value format to apply on delivery,"
@@ -356,7 +358,10 @@ public class RedirectFilter extends AnnotatedStandardMBean
         Collection<RedirectRule> rules = new ArrayList<>();
         for (Resource res : resource.getChildren()) {
             if(res.isResourceType(REDIRECT_RULE_RESOURCE_TYPE)){
-                rules.add(RedirectRule.from(res.getValueMap()));
+                RedirectRule rule = res.adaptTo(RedirectRule.class);
+                if(rule != null) {
+                    rules.add(rule);
+                }
             }
         }
         return rules;
@@ -391,9 +396,10 @@ public class RedirectFilter extends AnnotatedStandardMBean
         if (match != null) {
 
             RedirectRule redirectRule = match.getRule();
-            ZonedDateTime untilDateTime = redirectRule.getUntilDate();
-            if (untilDateTime != null && untilDateTime.isBefore(ZonedDateTime.now())) {
-                log.debug("redirect rule matched, but expired: {}", redirectRule.getUntilDate());
+
+            if (redirectRule.getState() != RedirectState.ACTIVE) {
+                log.debug("redirect rule matched, but didn't meet on/off time criteria: untilDate: {}, effectiveFrom: {}",
+                        redirectRule.getUntilDate(), redirectRule.getEffectiveFrom());
             } else {
                 RequestPathInfo pathInfo = slingRequest.getRequestPathInfo();
                 String resourcePath = pathInfo.getResourcePath();
@@ -432,7 +438,7 @@ public class RedirectFilter extends AnnotatedStandardMBean
 
         if (StringUtils.startsWith(location, "/") && !StringUtils.startsWith(location, "//")) {
             String ext = pathInfo.getExtension();
-            if (ext != null && !location.endsWith(ext)) {
+            if (ext != null && config.preserveExtension() && !location.endsWith(ext)) {
                 location += "." + ext;
             }
             if (mapUrls()) {
@@ -575,12 +581,12 @@ public class RedirectFilter extends AnnotatedStandardMBean
             ValueMap properties = configResource.getValueMap();
             String contextPrefix = properties.get(Redirects.CFG_PROP_CONTEXT_PREFIX, "");
 
-            RedirectMatch m = rules.match(resourcePath, contextPrefix);
+            RedirectMatch m = rules.match(resourcePath, contextPrefix, slingRequest);
             if (m == null && mapUrls()) { // try mapped url
                 String mappedUrl= mapUrl(resourcePath, slingRequest); // https://www.mysite.com/en/page.html
                 if(!resourcePath.equals(mappedUrl)) { // don't bother if sling mappings are not defined for this path
                     String mappedPath = URI.create(mappedUrl).getPath();  // /en/page.html
-                    m = rules.match(mappedPath);
+                    m = rules.match(mappedPath, "", slingRequest);
                 }
             }
             return m;

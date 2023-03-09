@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2017 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +14,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.mcp.impl.processes.renovator;
 
@@ -65,13 +63,14 @@ import com.day.cq.audit.AuditLogEntry;
 import com.day.cq.replication.ReplicationActionType;
 import com.day.cq.replication.ReplicationException;
 import com.day.cq.replication.Replicator;
+import com.google.common.collect.ImmutableMap;
 import org.apache.commons.lang.StringUtils;
 import org.apache.sling.api.resource.LoginException;
 import org.apache.sling.api.resource.ModifiableValueMap;
 import org.apache.sling.api.resource.PersistenceException;
-import org.apache.sling.api.resource.ResourceMetadata;
 import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.jcr.resource.api.JcrResourceConstants;
+import org.apache.sling.testing.mock.sling.builder.ImmutableValueMap;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -252,6 +251,8 @@ public class RenovatorTest {
         instance.init(rr, values);
 
         instance.run(rr);
+
+
         // Make sure that target folders were created
         assertNotNull(rr.getResource("/content/dam/folderC"));
         assertNotNull(rr.getResource("/content/dam/folderC/subfolder"));
@@ -295,8 +296,12 @@ public class RenovatorTest {
         for (Map.Entry<String, String> entry : testNodes.entrySet()) {
             String path = entry.getKey();
             String type = entry.getValue();
-            AbstractResourceImpl mockFolder = new AbstractResourceImpl(path, type, "", new ResourceMetadata());
-            mockFolder.getResourceMetadata().put(JCR_PRIMARYTYPE, type);
+
+            Map<String, Object> mockProperties = new HashMap<>();
+            mockProperties.put(JCR_PRIMARYTYPE, type);
+
+            AbstractResourceImpl mockFolder = new AbstractResourceImpl(path, type, "",
+                    mockProperties);
 
             when(rr.resolve(path)).thenReturn(mockFolder);
             when(rr.getResource(path)).thenReturn(mockFolder);

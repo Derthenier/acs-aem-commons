@@ -1,9 +1,8 @@
 /*
- * #%L
- * ACS AEM Commons Bundle
- * %%
- * Copyright (C) 2020 Adobe
- * %%
+ * ACS AEM Commons
+ *
+ * Copyright (C) 2013 - 2023 Adobe
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +14,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- * #L%
  */
 package com.adobe.acs.commons.wcm.impl;
 
@@ -75,12 +73,15 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
     private static final String USER_AGENT = "User-agent: ";
     private static final String SITEMAP = "Sitemap: ";
     private static final String DISALLOW = "Disallow: ";
+    private static final String CRAWL_DELAY = "Crawl-delay: ";
 
     private String externalizerDomain;
 
     private String robotsContentsPropertyPath;
 
     private boolean printGroupingComments;
+
+    private int crawlDelay;
 
     private transient RobotsRuleSet rules;
 
@@ -95,6 +96,7 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         externalizerDomain = config.externalizer_domain();
         robotsContentsPropertyPath = config.robots_content_property_path();
         printGroupingComments = config.print_grouping_comments();
+        crawlDelay = config.crawl_delay();
 
         rules = new RobotsRuleSet(config);
     }
@@ -122,17 +124,19 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         PageManager pageManager = pageManagerFactory.getPageManager(request.getResourceResolver());
         Page page = pageManager.getContainingPage(request.getResource());
         if (page != null) {
+
+            addCrawlDelay(writer);
+
             rules.getGroups().forEach(group -> writeGroup(group, request.getResourceResolver(), page, writer));
 
             rules.getSitemaps().stream().map(sitemap -> buildSitemapDirective(sitemap, request, pageManager, request.getResourceResolver())).forEach(writer::println);
             if (!rules.getSitemapProperties().isEmpty()) {
                 addRuleForPageHavingBooleanProperty(page, rules.getSitemapProperties(), writer, 
-                                                    (currentPage) -> buildSitemapDirective(currentPage.getPath(), request, pageManager, request.getResourceResolver()));
+                                                    (currentPage) -> buildSitemapDirective(currentPage.getPath(), request, pageManager, request.getResourceResolver()), false);
             }
         } else {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST);
         }
-
     }
 
     private void writeGroup(RobotsRuleGroup group, ResourceResolver resourceResolver, Page page, PrintWriter writer) {
@@ -143,18 +147,28 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         PageManager pageManager = page.getPageManager();
         group.getUserAgents().stream().map(this::buildUserAgentsDirective).forEach(writer::println);
 
-        group.getAllowed().stream().map(allowed -> buildAllowedOrDisallowedDirective(true, allowed, pageManager, resourceResolver)).forEach(writer::println);
+        group.getAllowed().stream().map(allowed -> buildAllowedOrDisallowedDirective(true, allowed, pageManager, resourceResolver, false)).forEach(writer::println);
 
-        List<String> allowProperties = group.getAllowProperties();
-        if (!allowProperties.isEmpty()) {
-            addRuleForPageHavingBooleanProperty(page, allowProperties, writer, (currentPage) -> buildAllowedOrDisallowedDirective(true, currentPage.getPath(), pageManager, resourceResolver));
+        List<String> allowPageProperties = group.getAllowPageProperties();
+        if (!allowPageProperties.isEmpty()) {
+            addRuleForPageHavingBooleanProperty(page, allowPageProperties, writer, (currentPage) -> buildAllowedOrDisallowedDirective(true, currentPage.getPath(), pageManager, resourceResolver, true), false);
         }
 
-        group.getDisallowed().stream().map(disallowed -> buildAllowedOrDisallowedDirective(false, disallowed, page.getPageManager(), resourceResolver)).forEach(writer::println);
+        List<String> allowPathProperties = group.getAllowPathProperties();
+        if (!allowPathProperties.isEmpty()) {
+            addRuleForPageHavingBooleanProperty(page, allowPathProperties, writer, (currentPage) -> buildAllowedOrDisallowedDirective(true, currentPage.getPath(), pageManager, resourceResolver, false), true);
+        }
 
-        List<String> disallowProperties = group.getDisallowProperties();
-        if (!disallowProperties.isEmpty()) {
-            addRuleForPageHavingBooleanProperty(page, disallowProperties, writer,  (currentPage) -> buildAllowedOrDisallowedDirective(false, currentPage.getPath(), pageManager, resourceResolver));
+        group.getDisallowed().stream().map(disallowed -> buildAllowedOrDisallowedDirective(false, disallowed, page.getPageManager(), resourceResolver, false)).forEach(writer::println);
+
+        List<String> disallowPageProperties = group.getDisallowPageProperties();
+        if (!disallowPageProperties.isEmpty()) {
+            addRuleForPageHavingBooleanProperty(page, disallowPageProperties, writer,  (currentPage) -> buildAllowedOrDisallowedDirective(false, currentPage.getPath(), pageManager, resourceResolver, true), false);
+        }
+
+        List<String> disallowPathProperties = group.getDisallowPathProperties();
+        if (!disallowPathProperties.isEmpty()) {
+            addRuleForPageHavingBooleanProperty(page, disallowPathProperties, writer,  (currentPage) -> buildAllowedOrDisallowedDirective(false, currentPage.getPath(), pageManager, resourceResolver, false), true);
         }
 
         if (printGroupingComments) {
@@ -164,13 +178,14 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
 
     /**
      * Recursively calls {@code ruleBuilderFunc} for the current page and all its children where one of the given propNames is having the boolean value {@code true}
-     * @param page the page from which to  start
-     * @param resourceResolver the resourceResolver to use
+     * @param page the page from which to start
      * @param propNames the list of property names on the page to evaluate
      * @param writer contains the generated output
      * @param ruleBuilderFunc generates the rule which is added to {@code writer}
+     * @param doNotRecurseIfRuleAdded set to false if generating a rule for path X should NOT prevent the recursion
+     *                                into subpaths of X.
      */
-    private void addRuleForPageHavingBooleanProperty(Page page, List<String> propNames, PrintWriter writer, Function<Page, String> ruleBuilderFunc) {
+    private void addRuleForPageHavingBooleanProperty(Page page, List<String> propNames, PrintWriter writer, Function<Page, String> ruleBuilderFunc, boolean doNotRecurseIfRuleAdded) {
         ValueMap pageProps = page.getProperties();
         boolean added = false;
         for (String prop : propNames) {
@@ -183,10 +198,14 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
             }
         }
 
-        if (!added) {
-            //since the rules are added to (dis)allow a page and it's children, we only need to recurse if no rule is added for the current page.
+        // Don't recurse into nested paths (stop here) if a rule has been added for this path AND this type of rule
+        // prevents recursing.
+        // Applies to path-based rules: There is no point in declaring ALLOW <subpath> if ALLOW <path> is declared.
+        // Same goes for DISALLOW <subpath>
+        // But for single page rules (ALLOW <page>), the path tree must be walked
+        if (!(added && doNotRecurseIfRuleAdded)) {
             Iterator<Page> pageIterator = page.listChildren(new PageFilter(false, true), false);
-            pageIterator.forEachRemaining(child -> addRuleForPageHavingBooleanProperty(child, propNames, writer, ruleBuilderFunc));
+            pageIterator.forEachRemaining(child -> addRuleForPageHavingBooleanProperty(child, propNames, writer, ruleBuilderFunc, doNotRecurseIfRuleAdded));
         }
 
     }
@@ -237,6 +256,20 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         return USER_AGENT + agent;
     }
 
+    private String buildCrawlerDelay() {
+        if (crawlDelay > 0) {
+            return CRAWL_DELAY + String.valueOf(crawlDelay);
+        }
+        return StringUtils.EMPTY;
+    }
+
+    private void addCrawlDelay(PrintWriter writer) {
+        String crawlDelayString = buildCrawlerDelay();
+        if (StringUtils.isNotBlank(crawlDelayString)) {
+            writer.println(crawlDelayString);
+        }
+    }
+
     private String buildSitemapDirective(String sitemap, SlingHttpServletRequest request, PageManager pageManager, ResourceResolver resourceResolver) {
         String sitemapPagePath = sitemap;
         if (!sitemapPagePath.startsWith("/")) {
@@ -263,10 +296,28 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         return sitemapRule;
     }
 
-    private String buildAllowedOrDisallowedDirective(boolean isAllowed, String allowedOrDisallowedRule, PageManager pageManager, ResourceResolver resourceResolver) {
+    /**
+     * Generate an ALLOWED or DISALLOWED rule for either the a folder/path or for a single page
+     * @param isAllowed
+     * @param allowedOrDisallowedRule
+     * @param pageManager
+     * @param resourceResolver
+     * @param generatePagePath false: generate rule for the path (default case before this flag was introduced).
+     *                         true: generate a rule for a single page
+     * @return
+     */
+    private String buildAllowedOrDisallowedDirective(boolean isAllowed, String allowedOrDisallowedRule, PageManager pageManager, ResourceResolver resourceResolver, boolean generatePagePath) {
         Page page = pageManager.getContainingPage(allowedOrDisallowedRule);
         if (page != null) {
-            allowedOrDisallowedRule = resourceResolver.map(page.getPath()) + "/";
+            // folder path
+            if (!generatePagePath) {
+                allowedOrDisallowedRule = resourceResolver.map(page.getPath()) + "/";
+            }
+            // single page
+            else {
+                allowedOrDisallowedRule = resourceResolver.map(page.getPath()) + ".html";
+            }
+
         }
         return (isAllowed ? ALLOW : DISALLOW) + allowedOrDisallowedRule;
     }
@@ -289,14 +340,20 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         @AttributeDefinition(name = "Allow Directives", description = "A set of Allow directives to add to the robots file. Each directive is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<allowed path>. If the specified path is a valid cq page, resourceResolver.map() will be called prior to adding the rule.")
         String[] allow_directives() default {};
 
-        @AttributeDefinition(name = "Allow Property Names", description = "A list of boolean page properties which enable generation of an allow directive for that page. Any directives added through this method are in addition to those specified in the allow.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
+        @AttributeDefinition(name = "Allow Path Property Names", description = "A list of boolean page properties which enable generation of an allow directive for that path. Any directives added through this method are in addition to those specified in the allow.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
         String[] allow_property_names() default {};
+
+        @AttributeDefinition(name = "Allow Page Property Names", description = "A list of boolean page properties which enable generation of an allow directive for that page. Any directives added through this method are in addition to those specified in the allow.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
+        String[] allow_page_property_names() default {};
 
         @AttributeDefinition(name = "Disallow Directives", description = "A set of Disallow directives to add to the robots file. Each directive is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<disallowed path>. If the specified path is a valid cq page, resourceResolver.map() will be called prior to adding the rule.")
         String[] disallow_directives() default {};
 
-        @AttributeDefinition(name = "Disallow Property Names", description = "A list of boolean page properties wich enable generation of a disallow directive for that page. Any directives added through this method are in addition to those specified in the disallowed.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
+        @AttributeDefinition(name = "Disallow Path Property Names", description = "A list of boolean page properties wich enable generation of a disallow directive for that path. Any directives added through this method are in addition to those specified in the disallowed.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
         String[] disallow_property_names() default {};
+
+        @AttributeDefinition(name = "Disallow Page Property Names", description = "A list of boolean page properties wich enable generation of a disallow directive for that page. Any directives added through this method are in addition to those specified in the disallowed.directives property. Each property name is optionally pre-fixed with a ruleGroupName. Syntax: [<ruleGroupName>:]<propertyName>")
+        String[] disallow_page_property_names() default {};
 
         @AttributeDefinition(name = "Sitemap Directives", description = "A set of Sitemap directives to add to the robots file. If the specified path is a valid AEM page path (either absolute or relative to the current page), externalizer is called with the specified Externalizer Domain to generate an absolute url to that page's .sitemap.xml, which will resolve to the ACS Commons Site Map Servlet.")
         String[] sitemap_directives() default {};
@@ -309,6 +366,9 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
 
         @AttributeDefinition(name = "Print Grouping Comments", description = "When enabled, comments are printed to the file for start and end of each rule group. This is primarily for debugging purposes.")
         boolean print_grouping_comments() default false;
+
+        @AttributeDefinition(name = "Crawl Delay", description = "Specify the crawl delay in seconds, the crawler will wait for the amount of seconds before crawling")
+        int crawl_delay() default 0;
     }
 
     private class RobotsRuleSet {
@@ -333,11 +393,17 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
             String[] disallowed = config.disallow_directives();
             processConfig(disallowed, group -> group.disallowed);
 
-            String[] disallowProps = config.disallow_property_names();
-            processConfig(disallowProps, group -> group.disallowProperties);
+            String[] disallowPathProps = config.disallow_property_names();
+            processConfig(disallowPathProps, group -> group.disallowPathProperties);
 
-            String[] allowProps = config.allow_property_names();
-            processConfig(allowProps, group -> group.allowProperties);
+            String[] disallowPageProps = config.disallow_page_property_names();
+            processConfig(disallowPageProps, group -> group.disallowPageProperties);
+
+            String[] allowPathProps = config.allow_property_names();
+            processConfig(allowPathProps, group -> group.allowPathProperties);
+
+            String[] allowPageProps = config.allow_page_property_names();
+            processConfig(allowPageProps, group -> group.allowPageProperties);
         }
 
         private void processConfig(String[] configs, Function<RobotsRuleGroup, List<String>> configListGetFunc) {
@@ -392,8 +458,10 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
         private List<String> userAgents = new ArrayList<>();
         private List<String> allowed = new ArrayList<>();
         private List<String> disallowed = new ArrayList<>();
-        private List<String> allowProperties = new ArrayList<>();
-        private List<String> disallowProperties = new ArrayList<>();
+        private List<String> allowPathProperties = new ArrayList<>();
+        private List<String> allowPageProperties = new ArrayList<>();
+        private List<String> disallowPathProperties = new ArrayList<>();
+        private List<String> disallowPageProperties = new ArrayList<>();
 
         public String getGroupName() {
             return groupName;
@@ -411,12 +479,20 @@ public final class RobotsServlet extends SlingSafeMethodsServlet {
             return Collections.unmodifiableList(disallowed);
         }
 
-        public List<String> getAllowProperties() {
-            return Collections.unmodifiableList(allowProperties);
+        public List<String> getAllowPathProperties() {
+            return Collections.unmodifiableList(allowPathProperties);
         }
 
-        public List<String> getDisallowProperties() {
-            return Collections.unmodifiableList(disallowProperties);
+        public List<String> getAllowPageProperties() {
+            return Collections.unmodifiableList(allowPageProperties);
+        }
+
+        public List<String> getDisallowPathProperties() {
+            return Collections.unmodifiableList(disallowPathProperties);
+        }
+
+        public List<String> getDisallowPageProperties() {
+            return Collections.unmodifiableList(disallowPageProperties);
         }
     }
 }
